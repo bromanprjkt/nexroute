@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Palet "Editorial Mono": kertas hangat + tinta near-black, near-monokrom
+       sesuai logo. Warna hanya dipakai untuk status (berhasil/gagal/aktif). */
+    --background: 40 24% 97%;      /* kertas hangat #FAF9F7 */
+    --foreground: 220 10% 9%;      /* tinta near-black */
+
+    --card: 0 0% 100%;             /* panel putih di atas kertas */
+    --card-foreground: 220 10% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 10% 9%;
+
+    --primary: 220 12% 11%;        /* aksen = tinta (tombol hitam) */
+    --primary-foreground: 40 24% 97%;
+
+    --secondary: 40 17% 93%;
+    --secondary-foreground: 220 12% 14%;
+
+    --muted: 40 17% 93%;
+    --muted-foreground: 220 8% 40%; /* tinta sekunder untuk label */
+
+    --accent: 40 16% 91%;
+    --accent-foreground: 220 12% 12%;
+
+    --destructive: 6 60% 45%;      /* merah bata (status gagal), bukan neon */
+    --destructive-foreground: 40 24% 97%;
+
+    --success: 152 44% 34%;        /* hijau editorial (status berhasil/aktif) */
+    --success-foreground: 40 24% 97%;
+
+    --border: 40 13% 87%;          /* hairline hangat */
+    --input: 40 13% 87%;
+    --ring: 220 12% 11%;
+
+    --radius: 0.3rem;
+  }
+
+  .dark {
+    /* Editorial Mono (gelap): charcoal hangat, bukan slate biru — tetap satu
+       keluarga desain dengan mode terang, warna hanya untuk status. */
+    --background: 40 8% 8%;        /* kertas malam hangat */
+    --foreground: 40 18% 90%;      /* tinta terang hangat */
+
+    --card: 40 7% 11%;             /* panel sedikit terangkat */
+    --card-foreground: 40 18% 90%;
+
+    --popover: 40 7% 11%;
+    --popover-foreground: 40 18% 90%;
+
+    --primary: 40 18% 90%;         /* tombol jadi tinta terang */
+    --primary-foreground: 40 10% 10%;
+
+    --secondary: 40 6% 16%;
+    --secondary-foreground: 40 18% 90%;
+
+    --muted: 40 6% 16%;
+    --muted-foreground: 40 8% 60%; /* label sekunder */
+
+    --accent: 40 6% 18%;
+    --accent-foreground: 40 18% 92%;
+
+    --destructive: 6 55% 52%;      /* merah bata sedikit lebih terang di gelap */
+    --destructive-foreground: 40 18% 96%;
+
+    --success: 152 40% 46%;        /* hijau editorial di gelap */
+    --success-foreground: 40 18% 96%;
+
+    --border: 40 6% 20%;           /* hairline gelap hangat */
+    --input: 40 6% 20%;
+    --ring: 40 14% 70%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+@layer components {
+  /* Label mikro editorial: kapital, tracking lebar, tinta sekunder. */
+  .label-mikro {
+    @apply text-[10.5px] font-medium uppercase tracking-[0.14em] text-muted-foreground;
+  }
+  /* Angka data: monospace + tabular supaya kolom lurus. */
+  .angka {
+    @apply font-mono tabular-nums tracking-tight;
+  }
+}
+
+@layer utilities {
+  /* Latar grid tipis (nuansa blueprint) untuk panel teknis. */
+  .grid-kertas {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.5) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .hide-scrollbar::-webkit-scrollbar { display: none; }
+  .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+}
+
+/* Penyelarasan ReactFlow dengan tema editorial. */
+.react-flow__controls {
+  box-shadow: none !important;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: hsl(var(--card)) !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--muted-foreground)) !important;
+}
+.react-flow__controls-button:hover {
+  background: hsl(var(--accent)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+.react-flow__controls-button svg { fill: currentColor; }
+
+/* Animasi masuk toast: geser-naik + fade. */
+@keyframes toast-masuk {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.toast-masuk {
+  animation: toast-masuk 0.18s ease-out;
+}

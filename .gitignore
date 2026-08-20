@@ -1,0 +1,39 @@
+# Dependensi
+node_modules/
+
+# Variabel lingkungan — commit .env.example saja, jangan .env yang berisi nilai asli
+.env
+.env.*
+!.env.example
+
+# Basis data lokal SQLite (data pengguna). Folder-nya dipertahankan lewat .gitkeep
+# supaya server bisa membuat file DB saat pertama kali dijalankan.
+data/*
+!data/.gitkeep
+
+# Hasil kompilasi & build
+dist/
+build/
+*.tsbuildinfo
+
+# Log
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Cache alat bantu
+.vite/
+.cache/
+.eslintcache
+coverage/
+
+# Berkas editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+.claude/

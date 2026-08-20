@@ -1,0 +1,28 @@
+{
+  "name": "nexroute",
+  "version": "1.0.0",
+  "description": "Local AI routing gateway",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w @nexroute/api\" \"npm run dev -w @nexroute/web\"",
+    "build": "npm run build --workspaces",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "db:generate": "npm run db:generate -w @nexroute/api",
+    "db:migrate": "npm run db:migrate -w @nexroute/api"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.1"
+  },
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

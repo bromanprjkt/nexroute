@@ -1,0 +1,1 @@
+ALTER TABLE `providers` ADD `error_cooldown_until` integer;
