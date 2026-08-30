@@ -57,12 +57,40 @@ function rentangKeBucket(rentang: string): { sejakMs: number; perHari: boolean; 
   }
 }
 
+let inFlightRequests = 0;
+let lastClientName = 'Agen AI';
+
+function parseClientName(userAgent: string | undefined): string {
+  if (!userAgent) return 'Agen AI (Tidak Dikenal)';
+  const ua = userAgent.toLowerCase();
+  if (ua.includes('claude-code')) return 'Claude Code';
+  if (ua.includes('cursor')) return 'Cursor';
+  if (ua.includes('kiro')) return 'Kiro AI';
+  if (ua.includes('cline')) return 'Cline';
+  if (ua.includes('roov')) return 'RooV';
+  if (ua.includes('postman')) return 'Postman';
+  if (ua.includes('curl')) return 'cURL';
+  if (ua.includes('node')) return 'Node.js Script';
+  if (ua.includes('python')) return 'Python Script';
+  return 'Agen AI';
+}
+
 export default async function (fastify: FastifyInstance) {
-  // Validasi kunci API inbound untuk semua rute /v1/*. Hanya menegakkan jika
-  // pengaturan `wajibApiKey` menyala DAN minimal ada satu kunci aktif (supaya
-  // pengguna lokal tidak mengunci diri sendiri sebelum membuat kunci).
-  fastify.addHook('onRequest', async (request, reply) => {
+  // Autentikasi gembok: pastikan tiap rute terlindungi jika kunci API wajib.
+  fastify.addHook('preHandler', async (request, reply) => {
+    // Abaikan auth untuk CORS (OPTIONS)
+    if (request.method === 'OPTIONS') return;
+
+    // Hanya rute API klien (/v1) yang diperiksa.
     if (!request.url.startsWith('/v1/')) return;
+    
+    // Update in-flight tracker & client name
+    inFlightRequests++;
+    lastClientName = parseClientName(request.headers['user-agent']);
+
+    request.raw.on('close', () => {
+      inFlightRequests = Math.max(0, inFlightRequests - 1);
+    });
 
     const barisWajib = await db.select().from(tabelPengaturan).where(eq(tabelPengaturan.kunci, 'wajibApiKey'));
     if (barisWajib[0]?.nilai !== 'true') return;
@@ -77,11 +105,18 @@ export default async function (fastify: FastifyInstance) {
 
     const cocok = disediakan ? kunciAktif.find(k => k.kunci === disediakan) : undefined;
     if (!cocok) {
+      inFlightRequests--;
       return reply.status(401).send({
         error: { message: 'Kunci API tidak valid atau tidak disertakan.', type: 'invalid_request_error', code: 'invalid_api_key' },
       });
     }
     await db.update(tabelKunciApi).set({ terakhirDipakai: new Date() }).where(eq(tabelKunciApi.id, cocok.id));
+  });
+
+  fastify.addHook('onResponse', async (request, reply) => {
+    if (request.url.startsWith('/v1/')) {
+      inFlightRequests = Math.max(0, inFlightRequests - 1);
+    }
   });
 
   // Endpoint utama, kompatibel dengan OpenAI Chat Completions.
@@ -94,6 +129,172 @@ export default async function (fastify: FastifyInstance) {
         error: { message: err.message, type: 'nexroute_error' }
       });
     }
+  });
+
+  // Endpoint khusus kompatibel dengan Anthropic Messages API (Dipakai oleh Claude Code)
+  const postMessagesHandler = async (request: any, reply: any) => {
+    try {
+      const data = request.body as any;
+      const openaiData: any = {
+        model: data.model,
+        messages: [],
+        stream: false, // Kita paksa false karena NexRoute belum mendukung stream secara native
+        temperature: data.temperature,
+        max_tokens: data.max_tokens || 4096,
+      };
+
+      if (data.system) {
+        if (typeof data.system === 'string') {
+          openaiData.messages.push({ role: 'system', content: data.system });
+        } else if (Array.isArray(data.system)) {
+          openaiData.messages.push({ role: 'system', content: data.system.map((s:any) => s.text).join('\n') });
+        }
+      }
+
+      if (data.messages) {
+        for (const m of data.messages) {
+          if (m.role === 'user') {
+            if (typeof m.content === 'string') {
+              openaiData.messages.push({ role: 'user', content: m.content });
+            } else if (Array.isArray(m.content)) {
+              // Terjemahkan tool_result Claude Code
+              const toolResults = m.content.filter((c:any) => c.type === 'tool_result');
+              const otherContent = m.content.filter((c:any) => c.type !== 'tool_result');
+              
+              if (otherContent.length > 0) {
+                 const textParts = otherContent.map((c:any) => {
+                   if (c.type === 'text') return { type: 'text', text: c.text };
+                   if (c.type === 'image') return { type: 'image_url', image_url: { url: `data:${c.source.media_type};base64,${c.source.data}` } };
+                   return { type: 'text', text: JSON.stringify(c) };
+                 });
+                 openaiData.messages.push({ role: 'user', content: textParts });
+              }
+
+              for (const tr of toolResults) {
+                openaiData.messages.push({
+                  role: 'tool',
+                  tool_call_id: tr.tool_use_id,
+                  content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content)
+                });
+              }
+            }
+          } else if (m.role === 'assistant') {
+            if (typeof m.content === 'string') {
+              openaiData.messages.push({ role: 'assistant', content: m.content });
+            } else if (Array.isArray(m.content)) {
+              const textParts = m.content.filter((c:any) => c.type === 'text').map((c:any) => c.text).join('\n');
+              const toolUses = m.content.filter((c:any) => c.type === 'tool_use');
+              const msgObj: any = { role: 'assistant', content: textParts };
+              if (toolUses.length > 0) {
+                msgObj.tool_calls = toolUses.map((t:any) => ({
+                  id: t.id,
+                  type: 'function',
+                  function: { name: t.name, arguments: JSON.stringify(t.input) }
+                }));
+              }
+              openaiData.messages.push(msgObj);
+            }
+          }
+        }
+      }
+
+      if (data.tools) {
+        openaiData.tools = data.tools.map((t:any) => ({
+          type: 'function',
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.input_schema
+          }
+        }));
+      }
+
+      const response: any = await processChatCompletion(openaiData);
+
+      // Terjemahkan balik ke Anthropic
+      const assistantMessage = response.choices?.[0]?.message;
+      const textContent = assistantMessage?.content || "";
+      const toolCalls = assistantMessage?.tool_calls || [];
+      
+      const anthropicContent = [];
+      if (textContent) {
+        anthropicContent.push({ type: "text", text: textContent });
+      }
+      for (const tc of toolCalls) {
+        let args = {};
+        try { args = JSON.parse(tc.function.arguments); } catch(e) {}
+        anthropicContent.push({
+          type: "tool_use",
+          id: tc.id,
+          name: tc.function.name,
+          input: args
+        });
+      }
+
+      // Jika stream, simulasikan SSE stream Anthropic
+      if (data.stream) {
+        reply.raw.setHeader('Content-Type', 'text/event-stream');
+        reply.raw.setHeader('Cache-Control', 'no-cache');
+        reply.raw.setHeader('Connection', 'keep-alive');
+        
+        reply.raw.write(`event: message_start\ndata: {"type":"message_start","message":{"id":"${response.id}","type":"message","role":"assistant","content":[],"model":"${data.model}","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":${response.usage?.prompt_tokens||0},"output_tokens":${response.usage?.completion_tokens||0}}}}\n\n`);
+        
+        for (let i = 0; i < anthropicContent.length; i++) {
+          const block = anthropicContent[i];
+          if (block.type === 'text') {
+            reply.raw.write(`event: content_block_start\ndata: {"type":"content_block_start","index":${i},"content_block":{"type":"text","text":""}}\n\n`);
+            // Escape newlines for SSE
+            const escapedText = block.text.replace(/\n/g, '\\n').replace(/"/g, '\\"');
+            reply.raw.write(`event: content_block_delta\ndata: {"type":"content_block_delta","index":${i},"delta":{"type":"text_delta","text":"${escapedText}"}}\n\n`);
+            reply.raw.write(`event: content_block_stop\ndata: {"type":"content_block_stop","index":${i}}\n\n`);
+          } else if (block.type === 'tool_use') {
+            reply.raw.write(`event: content_block_start\ndata: {"type":"content_block_start","index":${i},"content_block":{"type":"tool_use","id":"${block.id}","name":"${block.name}","input":{}}}\n\n`);
+            reply.raw.write(`event: content_block_delta\ndata: {"type":"content_block_delta","index":${i},"delta":{"type":"input_json_delta","partial_json":"${JSON.stringify(block.input).replace(/\n/g, '\\n').replace(/"/g, '\\"')}"}}\n\n`);
+            reply.raw.write(`event: content_block_stop\ndata: {"type":"content_block_stop","index":${i}}\n\n`);
+          }
+        }
+
+        const stopReason = toolCalls.length > 0 ? "tool_use" : "end_turn";
+        reply.raw.write(`event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"${stopReason}","stop_sequence":null},"usage":{"output_tokens":${response.usage?.completion_tokens||0}}}\n\n`);
+        reply.raw.write(`event: message_stop\ndata: {"type":"message_stop"}\n\n`);
+        reply.raw.end();
+        return reply;
+      }
+
+      return reply.send({
+        id: response.id || 'msg_nexroute_' + Date.now(),
+        type: 'message',
+        role: 'assistant',
+        model: data.model, // Membohongi SDK klien (kembalikan string yang sama persis dengan yang diminta)
+        content: anthropicContent,
+        stop_reason: toolCalls.length > 0 ? "tool_use" : "end_turn",
+        stop_sequence: null,
+        usage: {
+          input_tokens: response.usage?.prompt_tokens || 0,
+          output_tokens: response.usage?.completion_tokens || 0
+        }
+      });
+    } catch (err: any) {
+      return reply.status(400).send({
+        type: "error",
+        error: { type: "api_error", message: err.message }
+      });
+    }
+  };
+
+  // Endpoint utama
+  fastify.post('/v1/messages', postMessagesHandler);
+
+  // Endpoint alias khusus (contoh: /v1/alias/auto/messages)
+  // Ini digunakan untuk memotong (bypass) validasi klien yang menolak model tidak dikenal.
+  // Klien bisa mengirim model = "claude-3-5-sonnet-20241022" agar klien senang, 
+  // tetapi NexRoute akan menangkap URL "auto" dan memaksa model menjadi "auto".
+  fastify.post('/v1/alias/:alias/v1/messages', (req: any, rep) => {
+    // Timpa (override) properti model di body dengan alias dari URL
+    if (req.body && req.params.alias) {
+      req.body.model = req.params.alias; 
+    }
+    return postMessagesHandler(req, rep);
   });
 
   // Daftar model gaya OpenAI. Menggabungkan model virtual (auto/fast/smart/cheap —
@@ -220,12 +421,26 @@ export default async function (fastify: FastifyInstance) {
       return acc + ((log.tokenInput || 0) / 1_000_000) * 15 + ((log.tokenOutput || 0) / 1_000_000) * 75;
     }, 0);
 
+    const totalKarakterDihemat = logs.reduce((acc, log) => acc + (log.penghematanKarakter || 0), 0);
+    // Estimasi 1 token ~ 4 karakter
+    const tokenDihemat = Math.round(totalKarakterDihemat / 4);
+
     // Data topologi untuk diagram alur di dasbor (router → penyedia → model).
+    // Fallback: Jika ada inFlight tapi belum ada log berhasil, nyalakan animasi ke penyedia aktif pertama.
+    let activeProviderId = null;
+    if (logs[0]?.status === 'berhasil') {
+      activeProviderId = daftarPenyedia.find(p => p.nama === logs[0].providerAktual)?.id;
+    } else if (inFlightRequests > 0) {
+      activeProviderId = daftarPenyedia.find(p => p.aktif)?.id;
+    }
+
     const topologi = {
       routers: [{ id: 'router-1', name: 'NexRoute Auto' }],
       providers: daftarPenyedia.map(p => ({ id: p.id, name: p.nama, active: p.aktif })),
       models: daftarModel.map(m => ({ id: m.id, name: m.namaModel, providerId: m.providerId })),
-      lastActiveProviderId: logs[0]?.status === 'berhasil' ? daftarPenyedia.find(p => p.nama === logs[0].providerAktual)?.id : null
+      lastActiveProviderId: activeProviderId,
+      inFlight: inFlightRequests > 0,
+      clientName: lastClientName
     };
 
     return {
@@ -236,6 +451,7 @@ export default async function (fastify: FastifyInstance) {
       kegagalan: jumlahGagal,
       totalTokenInput,
       totalTokenOutput,
+      tokenDihemat,
       estimasiBiaya,
       topologi
     };

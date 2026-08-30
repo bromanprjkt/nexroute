@@ -41,6 +41,7 @@ export default function HalamanPengaturan() {
   const toast = useToast();
   const { tema, aturTema } = useTema();
   const [caveman, setCaveman] = useState(false);
+  const [ponytail, setPonytail] = useState(false);
   const [tokenSaver, setTokenSaver] = useState(true);
   const [memuat, setMemuat] = useState(true);
 
@@ -50,6 +51,7 @@ export default function HalamanPengaturan() {
         // Default sengaja: caveman OFF (harus eksplisit 'true'), token-saver ON
         // (cuma mati kalau eksplisit 'false') — jadi hemat token itu bawaan.
         setCaveman(r?.cavemanEnabled === 'true');
+        setPonytail(r?.ponytailEnabled === 'true');
         setTokenSaver(r?.tokenSaverEnabled !== 'false');
       })
       .catch(() => {})
@@ -108,10 +110,16 @@ export default function HalamanPengaturan() {
         ) : (
           <>
             <BarisSakelar
-              judul="Caveman / Ponytail Mode"
-              deskripsi="Menyisipkan instruksi tersembunyi ke LLM agar membalas dengan kode sesingkat mungkin, memangkas penjelasan basa-basi untuk menghemat token output."
+              judul="Caveman Mode"
+              deskripsi="Menyisipkan instruksi tersembunyi ke LLM agar membalas dengan singkat dan hemat token."
               aktif={caveman}
               onUbah={v => simpan('cavemanEnabled', v, () => setCaveman(v), () => setCaveman(!v))}
+            />
+            <BarisSakelar
+              judul="Mode Ponytail (Ekstrem)"
+              deskripsi="Memaksa LLM bertindak layaknya eksekutor mesin yang HANYA membalas dengan blok kode murni tanpa basa-basi. Cocok untuk AI Agent otomatis."
+              aktif={ponytail}
+              onUbah={v => simpan('ponytailEnabled', v, () => setPonytail(v), () => setPonytail(!v))}
             />
             <BarisSakelar
               judul="Token Saver (Kompresi RTK)"

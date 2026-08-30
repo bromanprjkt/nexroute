@@ -8,7 +8,7 @@ import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
 export const tabelPenyedia = sqliteTable('providers', {
   id: text('id').primaryKey(),
   nama: text('nama').notNull(),
-  jenis: text('jenis').notNull(), // 'openai', 'anthropic', 'google', 'custom'
+  jenis: text('jenis').notNull(), // 'openai', 'anthropic', 'google', 'vertex', 'ollama', 'custom'
   baseUrl: text('base_url'),
   apiKey: text('api_key'),
   aktif: integer('aktif', { mode: 'boolean' }).default(true).notNull(),
@@ -26,6 +26,12 @@ export const tabelAkun = sqliteTable('accounts', {
   baseUrl: text('base_url'), // opsional; menimpa baseUrl penyedia jika diisi
   prioritas: integer('prioritas').default(0).notNull(), // makin besar makin diutamakan
   aktif: integer('aktif', { mode: 'boolean' }).default(true).notNull(),
+  
+  // Sistem Kuota (Tier-Based Routing)
+  kuotaToken: integer('kuota_token').default(0), // 0 = unlimited
+  tokenTerpakai: integer('token_terpakai').default(0),
+  resetKuotaPada: integer('reset_kuota_pada', { mode: 'timestamp' }), // Kapan tokenTerpakai direset jadi 0
+  
   cooldownSampai: integer('cooldown_sampai', { mode: 'timestamp' }), // sedang dijeda sampai kapan
   tingkatBackoff: integer('tingkat_backoff').default(0).notNull(), // level exponential backoff berjalan
   kodeError: text('kode_error'), // kategori error terakhir: auth/kuota/rate_limit/transient/fatal
@@ -79,6 +85,7 @@ export const tabelLogPermintaan = sqliteTable('request_logs', {
   tokenOutput: integer('token_output'),
   error: text('error'),
   biaya: real('biaya').default(0), // biaya nyata (USD) dihitung dari tarif per-model
+  penghematanKarakter: integer('penghematan_karakter').default(0),
 });
 
 // Penyimpanan key/value serbaguna untuk preferensi global (mis. wajibApiKey,

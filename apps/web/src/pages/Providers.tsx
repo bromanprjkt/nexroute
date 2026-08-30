@@ -17,6 +17,8 @@ const JENIS_OPSI = [
   { nilai: 'custom', label: 'Custom (OpenAI Compatible)' },
   { nilai: 'anthropic', label: 'Anthropic' },
   { nilai: 'google', label: 'Google Gemini' },
+  { nilai: 'vertex', label: 'Vertex AI' },
+  { nilai: 'ollama', label: 'Ollama' },
 ];
 
 // Peta kode error internal (dari health-check) → label pendek untuk badge akun.

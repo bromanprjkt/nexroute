@@ -15,7 +15,11 @@ import { klasifikasiError, hitungCooldownMs, hitungBiaya } from './kesehatan';
 // Instruksi tersembunyi yang disisipkan ke system prompt saat "Caveman Mode" aktif —
 // menyuruh model menjawab sesingkat mungkin demi menghemat token output.
 const PONYTAIL_PROMPT = `
-[PENTING: Berperanlah sebagai Senior Developer yang sangat efisien. Berikan kode sesingkat mungkin. Utamakan menghapus kode yang tidak perlu. Jangan bertele-tele dan langsung ke intinya. Tidak perlu penjelasan len lebar.]
+[PENTING: Berperanlah sebagai eksekutor kode mesin. Jawab LANGSUNG dengan blok kode yang diminta. DILARANG KERAS menggunakan kata pengantar, penjelasan, atau basa-basi. Jika hanya butuh mengubah 1 baris, berikan seluruh kodenya atau berikan format diff.]
+`;
+
+const CAVEMAN_PROMPT = `
+[PENTING: Jawab sesingkat mungkin. Jangan bertele-tele.]
 `;
 
 export async function processChatCompletion(request: PermintaanChatCompletion): Promise<ResponsChatCompletion> {
@@ -27,27 +31,43 @@ export async function processChatCompletion(request: PermintaanChatCompletion): 
 
   const apakahTokenSaverAktif = getSetting('tokenSaverEnabled', 'true') === 'true';
   const apakahCavemanAktif = getSetting('cavemanEnabled', 'false') === 'true';
+  const apakahPonytailAktif = getSetting('ponytailEnabled', 'false') === 'true';
 
   let permintaanSaatIni = hapusAlatDuplikat(request) as PermintaanChatCompletion;
+  let totalKarakterDipotong = 0;
 
   // 1. Terapkan Token Saver (RTK Smart Compression) pada tool_calls / pesan panjang
   if (apakahTokenSaverAktif && permintaanSaatIni.messages) {
     permintaanSaatIni.messages = permintaanSaatIni.messages.map(msg => {
       if (typeof msg.content === 'string' && (msg.role === 'tool' || msg.content.length > 500)) {
-        return { ...msg, content: terapkanKompresiRtk(msg.content) };
+        const { text, savedChars } = terapkanKompresiRtk(msg.content);
+        totalKarakterDipotong += savedChars;
+        return { ...msg, content: text };
       }
       return msg;
     });
   }
 
-  // 2. Terapkan Prompt Injector (Ponytail / Caveman Mode)
-  if (apakahCavemanAktif && permintaanSaatIni.messages && permintaanSaatIni.messages.length > 0) {
+  // 2. Terapkan Prompt Injector (Identity & Modifiers)
+  // Identitas dasar NexRoute selalu disuntikkan terlepas dari modifier lain.
+  const IDENTITAS_NEXROUTE = "\n\n(IMPORTANT INSTRUCTION: If asked who you are, what model you are, or who created you, you MUST reply that you are NexRoute, an AI agent created by bromanprjkt. Never mention Anthropic, OpenAI, or Google. You are NexRoute.)\n";
+  const modifierTambahan = apakahPonytailAktif ? PONYTAIL_PROMPT : (apakahCavemanAktif ? CAVEMAN_PROMPT : "");
+  
+  const promptSuntikan = IDENTITAS_NEXROUTE + (modifierTambahan || "");
+  
+  if (permintaanSaatIni.messages && permintaanSaatIni.messages.length > 0) {
     const firstMsg = permintaanSaatIni.messages[0];
-    if (firstMsg.role === 'system' && typeof firstMsg.content === 'string') {
-      firstMsg.content += PONYTAIL_PROMPT;
+    if (firstMsg.role === 'system') {
+      if (typeof firstMsg.content === 'string') {
+        firstMsg.content += promptSuntikan;
+      } else if (Array.isArray(firstMsg.content)) {
+        firstMsg.content.push({ type: 'text', text: promptSuntikan });
+      }
     } else {
-      permintaanSaatIni.messages.unshift({ role: 'system', content: PONYTAIL_PROMPT.trim() });
+      permintaanSaatIni.messages.unshift({ role: 'system', content: promptSuntikan.trim() });
     }
+  } else {
+    permintaanSaatIni.messages = [{ role: 'system', content: promptSuntikan.trim() }];
   }
 
   // Editor seperti Cursor diam-diam mengirim permintaan kecil untuk membuat judul
@@ -140,7 +160,22 @@ export async function processChatCompletion(request: PermintaanChatCompletion): 
     const akunProv = await db.select().from(tabelAkun).where(eq(tabelAkun.penyediaId, prov.id));
     const sekarang = new Date();
     const akunSehat = akunProv
-      .filter(a => a.aktif && (!a.cooldownSampai || a.cooldownSampai < sekarang))
+      .filter(a => {
+        if (!a.aktif) return false;
+        if (a.cooldownSampai && a.cooldownSampai >= sekarang) return false;
+        
+        // Quota Tracking (Tier-based)
+        const kuota = a.kuotaToken ?? 0;
+        const terpakai = a.tokenTerpakai ?? 0;
+        
+        if (kuota > 0) {
+          // Jika sudah waktunya reset, anggap kuota utuh
+          if (a.resetKuotaPada && a.resetKuotaPada < sekarang) return true;
+          // Jika belum reset dan token habis, blokir akun ini
+          if (terpakai >= kuota) return false;
+        }
+        return true;
+      })
       .sort((a, b) => (b.prioritas - a.prioritas) || (a.tingkatBackoff - b.tingkatBackoff));
 
     // undefined = percobaan sintetis memakai kredensial penyedia (tak ada baris akun).
@@ -164,8 +199,18 @@ export async function processChatCompletion(request: PermintaanChatCompletion): 
 
         // Sukses: pulihkan kesehatan akun (reset cooldown & backoff).
         if (akun) {
+          const tokenInput = response.usage?.prompt_tokens ?? 0;
+          const tokenOutput = response.usage?.completion_tokens ?? 0;
+          const totalTokenDipakai = tokenInput + tokenOutput;
+
           await db.update(tabelAkun)
-            .set({ cooldownSampai: null, tingkatBackoff: 0, kodeError: null, terakhirError: null })
+            .set({ 
+              cooldownSampai: null, 
+              tingkatBackoff: 0, 
+              kodeError: null, 
+              terakhirError: null,
+              tokenTerpakai: (akun.tokenTerpakai ?? 0) + totalTokenDipakai
+            })
             .where(eq(tabelAkun.id, akun.id));
         }
 
@@ -183,6 +228,7 @@ export async function processChatCompletion(request: PermintaanChatCompletion): 
           tokenInput,
           tokenOutput,
           biaya: hitungBiaya(model, tokenInput, tokenOutput),
+          penghematanKarakter: totalKarakterDipotong,
         });
 
         return response;
@@ -229,6 +275,7 @@ export async function processChatCompletion(request: PermintaanChatCompletion): 
     durasiMs: Date.now() - waktuMulai,
     error: errorTerakhir?.message || 'Semua penyedia gagal.',
     biaya: 0,
+    penghematanKarakter: totalKarakterDipotong,
   });
 
   throw new Error(`Gagal memproses permintaan: ${errorTerakhir?.message || 'Semua rute gagal.'}`);
